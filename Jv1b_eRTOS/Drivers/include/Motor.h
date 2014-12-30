@@ -12,8 +12,8 @@
 #define MOTOR_POWER_BASE 0.0	// Starting power
 #define MOTOR_MAX_POWER  255.0
 #define MOTOR_MIN_POWER  255.0	// Minimum Running Power
-#define MOTOR_TIME_DELTA 3000.0	// Number of time ticks
-#define MOTOR_TIME_DELTA_SCL 30 // Default Scaled Ramp Duration
+#define MOTOR_TIME_DELTA 200.0	// Number of time ticks
+#define MOTOR_TIME_DELTA_SCL 2 // Default Scaled Ramp Duration
 #define MOTOR_DIRDUR_DEFAULT 0x05	// Default direction/duration variable bit8=Direction (0)-For CW bits7-0= Duration Value
 #define MOTOR_TIME_STEPS 1		// Ramp-up Time Resolution
 #define MOTOR_POWER_STEP 1		// Rate at which the Power is delivered
