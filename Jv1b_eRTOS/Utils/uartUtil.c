@@ -106,7 +106,7 @@ static portTASK_FUNCTION( vRxTask, pvParameters )
 						txMode = 'r';	// Switch Motor mode to RAMP up
 						intOCR2B_Int_S = MOTOR_POWER_BASE;
 						clkElapsed = 0;	// Reset the RAMP timer
-						vTaskResume( vMotorRamp_Handle );
+						//vTaskResume( vMotorRamp_Handle );
 					} else if ( txMode == 's' ) {	// If the mode was called up to cancel the ramp down
 						txMode = 'S';	// Switch the mode to Ramp Up
 						intOCR2B_Int_S = OCR2B;
@@ -116,15 +116,15 @@ static portTASK_FUNCTION( vRxTask, pvParameters )
 					if ( txMode == 'R' )	{	// If the motor is Running
 						txMode = 's';	// Switch the mode to RAMP down
 							// Only stop the duration timer if it is actually active
-						if (xTimerIsTimerActive(durationHandle) == pdTRUE) {
+						/*if (xTimerIsTimerActive(durationHandle) == pdTRUE) {    //  Disable Timer
 							xTimerStop(durationHandle, 100);
-						}
+						}*/
 						intOCR2B_Int = motPower;
 						// Re-calculate the rate-down 
 						rate_down = (float)(((motPower - MOTOR_POWER_BASE)/(motRampDown * 100.0)));
 						clkElapsed = 0;	// Reset the RAMP timer
 						// ####### Resume the Ramp Up Task
-						vTaskResume( vMotorRamp_Handle );
+						//vTaskResume( vMotorRamp_Handle );
 					} else if ( txMode == 'r' ) {
 						txMode = 'E';
 						intOCR2B_Int = OCR2B;
@@ -154,6 +154,26 @@ static portTASK_FUNCTION( vRxTask, pvParameters )
 						motDir = motDirDur & 0x40;
 						motDur = motDirDur & 0x3F;
 						xSerialPutChar( xPort, motDirDur, 100 );
+					}
+				} else if (rxChar == '1') {
+					if (txMode == 'N') {
+						goal = 190;
+						flagLoop = !flagLoop;
+					}
+				} else if (rxChar == '2') {
+					if (txMode == 'N') {
+						goal = -190;
+						flagLoop = !flagLoop;
+					}
+				} else if (rxChar == '3') {
+					if (txMode == 'N') {
+						goal = 190 * 2;
+						flagLoop = !flagLoop;
+					}
+				} else if (rxChar == '4') {
+					if (txMode == 'N') {
+						goal = -190 * 2;
+						flagLoop = !flagLoop;
 					}
 				}
 			} else {	// The motor is either not present OR it is not functional
@@ -190,7 +210,7 @@ void fnPrintWaterMark(void) {
 	xSerialPutChar( xPort, '*', 100 );
 	xSerialPutChar( xPort, uxTaskGetStackHighWaterMark(comTaskHandle), 100 );
 	xSerialPutChar( xPort, uxTaskGetStackHighWaterMark(ledTaskHandle), 100 );
-	xSerialPutChar( xPort, uxTaskGetStackHighWaterMark(vMotorRamp_Handle), 100 );
+	//xSerialPutChar( xPort, uxTaskGetStackHighWaterMark(vMotorRamp_Handle), 100 );
 	xSerialPutChar( xPort, uxTaskGetStackHighWaterMark(vMotor_Handle), 100 );
 	
 	xSerialPutChar( xPort, '*', 100 );

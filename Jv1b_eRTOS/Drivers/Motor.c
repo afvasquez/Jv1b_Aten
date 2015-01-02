@@ -19,19 +19,38 @@
 // AUX function prototypes
 // Motor Driving Task Function Prototype
 static portTASK_FUNCTION_PROTO( vMotorDriveTask, pvParameters );
-static portTASK_FUNCTION_PROTO( vMotorRampTask, pvParameters );
+//static portTASK_FUNCTION_PROTO( vMotorRampTask, pvParameters );
+static portTASK_FUNCTION( vPIDControlLoop, pvParameters ); 
+void pid_motor_command(float val);
 
 	// Local declaration of the motor drive handles
-TaskHandle_t vMotorRamp_Handle;
+//TaskHandle_t vMotorRamp_Handle;
 TaskHandle_t vMotor_Handle;
 
 // Function Prototypes
 void getPhaseCode(void);
 void vTimerCallback(TimerHandle_t pxTimer);
 
+//////////////////////////////////////////////////////////////////////////
+//	PID Motor Control Variables
+int measured_value = PID_MEAS_VALUE_INIT;	// Create and initialize measured value (Change only when interrupt)
+float Kp = 2.7;	// Create and initialize PID constants based on 20 increment
+double Ki = 0.009;   // 0.3
+double Kd = 0.001;
+//int setpoint = PID_MEAS_VALUE_INIT-((5.0*6.0*4.0)+9);		// Create and initialize setpoint to be the same as the measured value
+#define PID_FOLLOWER_INC 2
+int setpoint = PID_MEAS_VALUE_INIT;		// Create and initialize setpoint to be the same as the measured value
+char flagLoop = 0x00;
+int goal = 0;
+int error;									// Create error value
+int previous_error = 0;		// Create and initialize Previous Error value
+float integral = PID_INTEGRAL_INIT;			// Create and initialize integral value
+float derivative;								// Create derivative value
+float output;								// Create output variable
+
 // CW Motor Lookup Table
-const char mtrCW_Rotate[8] = { 0x3F, 0x26, 0x0D, 0x25, 0x13, 0x16, 0x0B, 0x07 };
-const char mtrCCW_Rotate[8] = { 0x3F, 0x0B, 0x16, 0x13, 0x25, 0x0D, 0x26, 0x07 };
+const char mtrCW_Rotate[8] = { 0x07, 0x26, 0x0D, 0x25, 0x13, 0x16, 0x0B, 0x3F }; // 07 for no resistance
+const char mtrCCW_Rotate[8] = { 0x07, 0x0B, 0x16, 0x13, 0x25, 0x0D, 0x26, 0x3F };
 // Current Motor Phase status
 char intPhase = 0xFF;	// FF being the starting CODE
 float intOCR2B_Int;
@@ -49,7 +68,7 @@ char motDirDur = MOTOR_DIRDUR_DEFAULT;
 char motDir = 0x00;
 char motDur = 0x05;
 char runDur = 0;
-TimerHandle_t durationHandle;
+//TimerHandle_t durationHandle;
 	
 // Initialization function
 void motor_setup(void) {
@@ -64,8 +83,7 @@ void motor_setup(void) {
 	
 	
 	// ############ Set the motor timer
-	//xTimerCreate( "Timer", ( 1000 ), pdTRUE, ( void * ) 1, vTimerCallback );
-	durationHandle = xTimerCreate("Timer", 1000, pdTRUE, 1, vTimerCallback);
+	//durationHandle = xTimerCreate("Timer", 1000, pdTRUE, 1, vTimerCallback);
 	
 	// Reset the elapsed time (in thousands of a second)
 	clkElapsed = 0x0000;	
@@ -95,7 +113,8 @@ void motor_setup(void) {
 void vStartMotorTask( UBaseType_t uxPriority) {	
 	// Start the Motor Function
 	xTaskCreate( vMotorDriveTask, "M", configMINIMAL_STACK_SIZE*2, NULL, uxPriority+1, &vMotor_Handle );
-	xTaskCreate( vMotorRampTask, "R", configMINIMAL_STACK_SIZE*2, NULL, uxPriority, &vMotorRamp_Handle );
+	//xTaskCreate( vMotorRampTask, "R", configMINIMAL_STACK_SIZE*2, NULL, uxPriority, &vMotorRamp_Handle );
+	xTaskCreate( vPIDControlLoop, "P", configMINIMAL_STACK_SIZE*3, NULL, uxPriority, NULL );
 }
 
 static portTASK_FUNCTION( vMotorDriveTask, pvParameters )
@@ -110,25 +129,31 @@ static portTASK_FUNCTION( vMotorDriveTask, pvParameters )
 		if (xSemaphoreTake(motor_semaphore, portMAX_DELAY))
 		{
 			cInputs = PIND & 0b10100000; // Get the Over-Current Flag
-			if ((txMode == 'R' || txMode == 'r' || txMode == 's' || txMode == 'E' || txMode == 'S' ) && (cInputs & 0b00100000))
+			// if ((txMode == 'R' || txMode == 'r' || txMode == 's' || txMode == 'E' || txMode == 'S' ) && (cInputs & 0b00100000))
+			if ((txMode == 'R' || txMode == 'r' || txMode == 's' || txMode == 'E' || txMode == 'S' ))
 			{	// And Check for Overpowering!! -------------------------^
 					// The motor is about to run in this routine ( CW Direction Only )
-					if (motDir > 0) {
-						PORTC = mtrCCW_Rotate[( PINB & 0b00000111 )];
+					if (OCR2B > 0)
+					{
+						if (motDir > 0) {
+							PORTC = mtrCCW_Rotate[( PINB & 0b00000111 )];
+							} else {
+							PORTC = mtrCW_Rotate[( PINB & 0b00000111 )];
+						}
 					} else {
-						PORTC = mtrCW_Rotate[( PINB & 0b00000111 )];
+						PORTC = mtrCW_Rotate[0];
 					}
 				} else if ( txMode == 'N' ) {	// If (In any case) the Motor State is N, Clamp down and set base PWM
 					PORTC = mtrCW_Rotate[7];
 					OCR2B = MOTOR_POWER_BASE;				
 				} else {	// OVERPOWERING SCENARIO
 					portENTER_CRITICAL();
-						vTaskSuspend(vMotorRamp_Handle);
+						//vTaskSuspend(vMotorRamp_Handle);
 						txMode = 'N'; // Clamped state
 						PORTC = mtrCW_Rotate[7];	// CLAMP ASAP!!
-						if (xTimerIsTimerActive(durationHandle) == pdTRUE) {
+						/*if (xTimerIsTimerActive(durationHandle) == pdTRUE) {  // Disable timer
 							xTimerStop(durationHandle, 100);
-						}
+						}*/
 						OCR2B = MOTOR_POWER_BASE;	// Reset to Base Power
 						ledTaskRate = LED_TASK_RATE_ERROR;	// Clamp and throw error light
 					portEXIT_CRITICAL();
@@ -139,7 +164,7 @@ static portTASK_FUNCTION( vMotorDriveTask, pvParameters )
 
 //////////////////////////////////////////////////////////////////////////
 // Motor Ramping Task
-static portTASK_FUNCTION( vMotorRampTask, pvParameters ) {
+/*static portTASK_FUNCTION( vMotorRampTask, pvParameters ) {
 	// Initialize the last time this task was woken
 	TickType_t rampLastTick;
 	const TickType_t xFrequency = 1;	// Ramp Algorithm Frequency when Ramping
@@ -166,16 +191,16 @@ static portTASK_FUNCTION( vMotorRampTask, pvParameters ) {
 				txMode = 'R';
 				// If the motor is already at set speed, suspend the task
 				runDur = 0x00;
-				xTimerStart(durationHandle, 100);
+				//xTimerStart(durationHandle, 100);
 				vTaskSuspend( NULL );	// Suspend Self
 			}
 		} else if (txMode == 's' || txMode == 'E') {	// If the motor is being stopped
 			if (OCR2B == MOTOR_POWER_BASE) {
 				txMode = 'N';
-				if (xTimerIsTimerActive(durationHandle) == pdTRUE) {
+				/*if (xTimerIsTimerActive(durationHandle) == pdTRUE) {     // Disable timer
 					xTimerStop(durationHandle, 100);
-				}
-				vTaskSuspend( NULL );
+				}*/
+/*				vTaskSuspend( NULL );
 			} else { 
 				OCR2B = (char)(intOCR2B_Int - (clkElapsed * rate_down));
 				vTaskDelayUntil(&rampLastTick, xFrequency);	// vTaskDelayUntil to the next millisecond
@@ -191,7 +216,7 @@ static portTASK_FUNCTION( vMotorRampTask, pvParameters ) {
 		//ubtWM = uxTaskGetStackHighWaterMark(NULL);
 		//fnPrintWaterMark(ubtWM,3);
 	}
-}
+}*/
 
 // This function builds the code sent by the motor on the different pins
 void getPhaseCode(void) {
@@ -199,6 +224,7 @@ void getPhaseCode(void) {
 }
 
 // Software Timer callback
+/*
 void vTimerCallback(TimerHandle_t pxTimer) {
 	// Perform the duration control algorithm
 	if (motDur > 0 && txMode == 'R')
@@ -220,6 +246,89 @@ void vTimerCallback(TimerHandle_t pxTimer) {
 			xTimerStop(durationHandle, 100);
 		}
 	}
+} */
+
+//////////////////////////////////////////////////////////////////////////
+// Motor Ramping Task
+static portTASK_FUNCTION( vPIDControlLoop, pvParameters ) {
+	// Initialize the last time this task was woken
+	TickType_t rampLastTick;
+	
+	previous_error = measured_value;
+	
+	rampLastTick = xTaskGetTickCount();	// Record the last wake time
+	for (;;)	// Loop this task FOREVER
+	{	// Start the PID control Loop
+		if (goal > setpoint) {
+			setpoint += PID_FOLLOWER_INC;
+			if (goal < setpoint) {
+				setpoint = goal;
+			}
+		} else if (goal < setpoint) {
+			setpoint -= PID_FOLLOWER_INC;
+			if (goal > setpoint) {
+				setpoint = goal;
+			}
+		} else {
+			// Needs to retract
+			if (flagLoop) {
+				flagLoop = !flagLoop;
+				goal = 0;
+			} else {
+				txMode = 'N';
+			}
+		}
+		
+		error = setpoint - measured_value;
+		integral = integral + (error * 0.001);	// Assuming that the PID loop is visited every ms
+		derivative = (error - previous_error) * 1000;	// Assuming that the PID loop is visited every ms
+		output = Kp*error + Ki*integral + Kd*derivative;	// generate output
+		pid_motor_command(output);
+		xSemaphoreGive(motor_semaphore);	// Give the Semaphore
+		//if (output != 0) {
+			//
+			//xSerialPutChar( NULL, 'H', 100 );
+			//if (error < 127.0 && error > -128) {
+				//xSerialPutChar( NULL, (signed char) error , 100 );
+			//} else {
+				//xSerialPutChar( NULL, 0xBE , 100 );
+			//}
+			//xSerialPutChar( NULL, '\t' , 100 );
+			//xSerialPutChar( NULL, (signed char) output , 100 );
+			//xSerialPutChar( NULL, 'h', 100 );
+		//}
+		previous_error = error;
+		vTaskDelayUntil(&rampLastTick, 10);	// vTaskDelayUntil to the next millisecond
+	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+// PID Motor Command Function
+void pid_motor_command(float val)	{
+	// Send the necessary value to the PWM and Motor Drive
+	if (val <= -3.0) {	// Set CCW Rotation
+		txMode = 'R';
+		motDir = 0x40;
+		val = (val * -1) * 2.55;
+		if (val > 99) {
+			OCR2B = 255;
+		} else {
+			OCR2B = (char) val;
+		}
+	} else if (val >= 3.0) {
+		txMode = 'R';
+		motDir = 0x00;
+		val = (val * 2.55);
+		if (val > 99) {
+			OCR2B = 255;
+			} else {
+			OCR2B = (char) val;
+		}
+	} else {
+		//PORTC = mtrCW_Rotate[7];	// CLAMP
+		//txMode = 'N';
+		OCR2B = 0x00;	// Turn off the PWM
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -227,6 +336,15 @@ void vTimerCallback(TimerHandle_t pxTimer) {
 ISR (HALL_0_Vect) {
 	// Define the woken task variable
 	int motor_task_woken = 0;
+	
+	// Re-evaluate measured value
+	if (motDir > 0) {
+		// Motor is spinning CCW, decrease measured value;
+		measured_value--;
+	} else if (motDir == 0) {
+		// Motor is spinning CW, increase measured value
+		measured_value++;
+	}	// Ignore change if the belt is moved by an outside force
 	
 	// Skip if in the "N" State
 	if ( txMode != "N" ) {
